@@ -1,4 +1,6 @@
 const Article = require('mongoose').model('Article');
+const Category = require('mongoose').model('Category');
+const initializeTags = require('./../models/Tag').initializeTags;
 
 module.exports = {
     createGet: (req, res) => {
@@ -10,7 +12,10 @@ module.exports = {
             return;
         }
 
-        res.render('article/create');
+        Category.find({}).then(categories =>{
+            res.render('article/create', {categories: categories});
+        })
+
     },
 
     createPost: (req, res) => {
@@ -37,22 +42,19 @@ module.exports = {
         }
 
         articleArgs.author = req.user.id;
+        articleArgs.tags = [];
         Article.create(articleArgs).then(article => {
-            req.user.articles.push(article.id);
-            req.user.save(err => {
-                if (err){
-                    res.redirect('/', {error : err.message});
-                }else {
-                    res.redirect('/');
-                }
-            });
-        })
+            let tagNames = articleArgs.tagNames.split(/\s+|,/).filter(tag => {return tag});
+            initializeTags(tagNames, article.id);
+            article.prepareInsert();
+            res.redirect('/');
+        });
     },
 
     details: (req, res) => {
         let id = req.params.id;
 
-        Article.findById(id).populate('author').then(article => {
+        Article.findById(id).populate('author tags').then(article => {
             if (!req.user){
                 res.render('article/details', { article: article, isUserAuthorized: false});
                 return;
@@ -77,14 +79,18 @@ module.exports = {
             return;
         }
 
-        Article.findById(id).then(article => {
+        Article.findById(id).populate('tags').then(article => {
             req.user.isInRole('Admin').then(isAdmin => {
                 if (!isAdmin && !req.user.isAuthor(article)) {
                     res.redirect('/');
                     return;
                 }
+                Category.find({}).then(categories => {
+                    article.categories = categories;
 
-                res.render('article/edit', article)
+                    article.tagNames = article.tags.map(tag => {return tag.name});
+                    res.render('article/edit', article)
+                })
             });
         });
     },
@@ -112,10 +118,39 @@ module.exports = {
         if(errorMsg) {
             res.render('article/edit', {error: errorMsg})
         } else {
-            Article.update({_id: id}, {$set: {title: articleArgs.title, content: articleArgs.content}})
-                .then(updateStatus => {
+            Article.findById(id).populate('category tags').then(article => {
+                if (article.category.id !== articleArgs.category) {
+                    article.category.articles.remove(article.id);
+                    article.category.save();
+                }
+                article.category = articleArgs.category;
+                article.title = articleArgs.title;
+                article.content = articleArgs.content;
+
+                let newTagNames = articleArgs.tags.split(/\s+|,/).filter(tag => {return tag});
+
+                let oldTags = article.tags
+                    .filter(tag => {
+                        return newTagNames.indexOf(tag.name) === -1;
+                    });
+
+                for (let tag of oldTags){
+                    tag.deleteArticle(article.id);
+                    article.deleteTag(tag.id);
+                }
+
+                initializeTags(newTagNames, article.id);
+
+                Category.findById(article.category).then(category => {
+                    if (category.articles.indexOf(article.id) === -1){
+                        category.articles.push(article.id);
+                        category.save();
+                    }
+
                     res.redirect(`/article/details/${id}`);
-                })
+
+                });
+            });
         }
     },
 
@@ -130,13 +165,14 @@ module.exports = {
             return;
         }
 
-        Article.findById(id).then(article => {
+        Article.findById(id).populate('category tags').then(article => {
             req.user.isInRole('Admin').then(isAdmin => {
                 if (!isAdmin && !req.user.isAuthor(article)) {
                     res.redirect('/');
                     return;
                 }
 
+                article.tagNames = article.tags.map(tag => { return tag.name })
                 res.render('article/delete', article)
             });
         });
@@ -157,22 +193,8 @@ module.exports = {
         req.user.isInRole('Admin').then(isAdmin => {
             if (isAdmin) {
                 Article.findOneAndRemove({_id: id}).populate('author').then(article => {
-                    let author = article.author;
-
-                    // Index of the article's ID in the author's articles.
-                    let index = author.articles.indexOf(article.id);
-
-                    if(index < 0) {
-                        let errorMsg = 'Article was not found for that author!';
-                        res.render('article/delete', {error: errorMsg})
-                    } else {
-                        // Remove count elements after given index (inclusive).
-                        let count = 1;
-                        author.articles.splice(index, count);
-                        author.save().then((user) => {
-                            res.redirect('/');
-                        });
-                    }
+                    article.prepareDelete();
+                    res.redirect('/');
                 });
             }
             else {
@@ -181,7 +203,5 @@ module.exports = {
 
 
         });
-
-
     }
 };

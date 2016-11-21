@@ -1,5 +1,6 @@
-const Role=require('mongoose').model('Role');
 const User = require('mongoose').model('User');
+const Role = require('mongoose').model('Role');
+
 const encryption = require('./../utilities/encryption');
 
 module.exports = {
@@ -31,35 +32,27 @@ module.exports = {
                     fullName: registerArgs.fullName,
                     salt: salt
                 };
-                let roles = [];
-                Role.findOne({name: 'User'}).then(role=> {
-                    roles.push(role.id);
-                    userObject.roles = roles;
 
+                let roles = [];
+                Role.findOne({name: 'User'}).then(role => {
+                    roles.push(role.id);
+
+                    userObject.roles = roles;
                     User.create(userObject).then(user => {
-                        role.users.push(user);
-                        role.save(err=> {
+                        user.prepareInsert();
+                        req.logIn(user, (err) => {
                             if (err) {
                                 registerArgs.error = err.message;
                                 res.render('user/register', registerArgs);
-
+                                return;
                             }
-                            else {
-                                req.logIn(user, (err)=> {
-                                    if (err) {
-                                        registerArgs.error = err.message;
-                                        res.render('user/register', registerArgs);
-                                        return;
-                                    }
-                                    res.redirect('/');
-                                })
-                            }
+                            res.redirect('/');
                         });
                     });
-                })}
-            });
-
-            },
+                });
+            }
+        })
+    },
 
     loginGet: (req, res) => {
         res.render('user/login');
@@ -76,14 +69,14 @@ module.exports = {
             }
 
             req.logIn(user, (err) => {
-               if(err){
-                   console.log(err);
-                   res.redirect('/user/login',{error:err.message});
-                   return;
-               }
-               let returnUrl='/';
-                if(req.session.returnUrl){
-                   returnUrl= req.session.returnUrl;
+                if (err) {
+                    res.render('/user/login', {error: err.message});
+                    return;
+                }
+
+                let returnUrl = '/';
+                if(req.session.returnUrl) {
+                    returnUrl = req.session.returnUrl;
                     delete req.session.returnUrl;
                 }
 
@@ -97,3 +90,38 @@ module.exports = {
         res.redirect('/');
     }
 };
+
+module.exports.seedAdmin = () => {
+    let email = 'admin@softuni.bg';
+    User.findOne({email: email}).then(admin => {
+        if (!admin) {
+            Role.findOne({name: 'Admin'}).then(role => {
+                let salt = encription.generateSalt();
+                let passwordHash = encription.hashPassword('admin', salt);
+
+                let roles = [];
+                roles.push(role.id);
+
+                let user = {
+                    email: email,
+                    passwordHash: passwordHash,
+                    fullName: 'Admin',
+                    articles: [],
+                    salt: salt,
+                    roles: roles
+                };
+
+                User.create(user).then(user => {
+                    role.users.push(user.id);
+                    role.save(err => {
+                        if (err) {
+                            console.log(err.message);
+                        } else {
+                            console.log('Admin seeded successfully')
+                        }
+                    });
+                })
+            })
+        }
+    })
+}
